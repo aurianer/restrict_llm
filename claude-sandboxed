@@ -1,0 +1,88 @@
+#!/bin/bash
+# Launches Claude Code inside a bwrap sandbox with:
+#   - All namespaces unshared (PID, IPC, UTS, cgroup, user) + net re-enabled
+#   - Mount namespace: only explicitly listed paths visible
+#   - Minimal /etc (only ssl, resolv.conf, hosts, nsswitch.conf, ld config)
+#   - Synthetic /etc/passwd and /etc/group (no system user list leak)
+#   - Private /tmp, home tmpfs (anything not listed is empty)
+#   - No /sys, no /run (except systemd-resolved stub)
+#   - seccomp-bpf filter (~49 dangerous syscalls blocked by the kernel;
+#     mount/umount2/pivot_root left allowed so Claude Code's nested bwrap works)
+#   - --new-session (prevents TIOCSTI terminal injection into parent)
+#   - --die-with-parent (auto-cleanup on parent exit)
+#
+# No setuid binary — bwrap uses unprivileged user namespaces.
+#
+# Install:
+#   cp claude-sandboxed /home/llm_restricted/.local/bin/claude-sandboxed
+#   chmod +x /home/llm_restricted/.local/bin/claude-sandboxed
+#   ./generate-seccomp-filter -o /home/llm_restricted/.local/share/claude/seccomp-filter.bpf
+
+set -euo pipefail
+
+CLAUDE_BIN="$(readlink -f /home/llm_restricted/.local/bin/claude)"
+
+SECCOMP_FILTER="/home/llm_restricted/.local/share/claude/seccomp-filter.bpf"
+if [ ! -f "$SECCOMP_FILTER" ]; then
+    echo "seccomp filter not found at $SECCOMP_FILTER" >&2
+    echo "Generate it with: generate-seccomp-filter -o $SECCOMP_FILTER" >&2
+    exit 1
+fi
+
+if [ ! -x "$CLAUDE_BIN" ]; then
+    echo "Claude binary not found or not executable: $CLAUDE_BIN" >&2
+    exit 1
+fi
+
+(exec /usr/bin/bwrap \
+  --die-with-parent \
+  --unshare-all \
+  --share-net \
+  --new-session \
+  \
+  --dev /dev \
+  --proc /proc \
+  --tmpfs /tmp \
+  \
+  --ro-bind /usr /usr \
+  --ro-bind /lib /lib \
+  --ro-bind /lib64 /lib64 \
+  --ro-bind /bin /bin \
+  --ro-bind /sbin /sbin \
+  \
+  --ro-bind /etc/ssl /etc/ssl \
+  --ro-bind /etc/resolv.conf /etc/resolv.conf \
+  --ro-bind /etc/hosts /etc/hosts \
+  --ro-bind /etc/nsswitch.conf /etc/nsswitch.conf \
+  --ro-bind /etc/ld.so.cache /etc/ld.so.cache \
+  --ro-bind /etc/ld.so.conf /etc/ld.so.conf \
+  --ro-bind /etc/ld.so.conf.d /etc/ld.so.conf.d \
+  --ro-bind /etc/alternatives /etc/alternatives \
+  --ro-bind /etc/localtime /etc/localtime \
+  --ro-bind /etc/mime.types /etc/mime.types \
+  --ro-bind /etc/ca-certificates /etc/ca-certificates \
+  --file 11 /etc/passwd \
+  --file 12 /etc/group \
+  \
+  --tmpfs /home/llm_restricted \
+  --bind /home/llm_restricted/projects /home/llm_restricted/projects \
+  --bind /home/emily/projects /home/emily/projects \
+  --bind /home/llm_restricted/.claude /home/llm_restricted/.claude \
+  --ro-bind /home/llm_restricted/.local /home/llm_restricted/.local \
+  --ro-bind /home/llm_restricted/.bashrc /home/llm_restricted/.bashrc \
+  --ro-bind /home/llm_restricted/.profile /home/llm_restricted/.profile \
+  \
+  --ro-bind /run/systemd/resolve /run/systemd/resolve \
+  \
+  --seccomp 10 \
+  \
+  --setenv HOME /home/llm_restricted \
+  --setenv USER llm_restricted \
+  --setenv TMPDIR /tmp \
+  --setenv CLAUDE_CODE_SUBPROCESS_ENV_SCRUB 1 \
+  \
+  "$CLAUDE_BIN" "$@") \
+  \
+  10< "$SECCOMP_FILTER" \
+  11< <(getent passwd "$(id -u)" 65534) \
+  12< <(getent group "$(id -g)" 65534)
