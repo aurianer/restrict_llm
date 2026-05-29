@@ -222,9 +222,25 @@ int main(int argc, char *argv[]) {
     }
 
     /* Block SOCK_RAW in socket() — prevents packet sniffing / spoofing.
-     * Allow SOCK_STREAM (TCP) and SOCK_DGRAM (UDP) normally. */
+     * Allow SOCK_STREAM (TCP) and SOCK_DGRAM (UDP) normally.
+     *
+     * AF_NETLINK is EXEMPTED from this block. Like the mount/umount2/pivot_root
+     * exemptions above, this is required by a nested bwrap (Claude Code's inner
+     * Bash sandbox spawns bwrap on Linux). That inner bwrap unshares the network
+     * namespace and brings up loopback via
+     *   socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE)
+     * If we block it, the inner bwrap dies and *every shell command* fails with:
+     *   bwrap: loopback: Failed to create NETLINK_ROUTE socket: Operation not permitted
+     * A netlink "raw" socket is just the netlink convention — it is NOT a
+     * packet-sniffing/spoofing primitive, so exempting it costs no security
+     * (and llm_restricted has no CAP_NET_ADMIN to reconfigure host networking).
+     * We still block SOCK_RAW for every other family, which is the real attack
+     * surface: AF_INET/AF_INET6 raw IP (spoofing, raw ICMP) and AF_PACKET (L2
+     * sniffing). The two comparisons (family != AF_NETLINK) AND (type has
+     * SOCK_RAW) are ANDed, so only non-netlink raw sockets are rejected. */
     rc = seccomp_rule_add(ctx, SCMP_ACT_ERRNO(EPERM),
-                          SCMP_SYS(socket), 1,
+                          SCMP_SYS(socket), 2,
+                          SCMP_A0(SCMP_CMP_NE, AF_NETLINK),
                           SCMP_A1(SCMP_CMP_MASKED_EQ, SOCK_RAW, SOCK_RAW));
     if (rc == 0) {
         blocked_count++;
