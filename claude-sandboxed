@@ -69,6 +69,7 @@ fi
   --bind /home/emily/projects /home/emily/projects \
   --bind /home/emily/virtual_envs /home/emily/virtual_envs \
   --bind /home/llm_restricted/.claude /home/llm_restricted/.claude \
+  --bind /home/llm_restricted/config /home/llm_restricted/config \
   --ro-bind /home/llm_restricted/.local /home/llm_restricted/.local \
   --ro-bind /home/llm_restricted/.bashrc /home/llm_restricted/.bashrc \
   --ro-bind /home/llm_restricted/.profile /home/llm_restricted/.profile \
