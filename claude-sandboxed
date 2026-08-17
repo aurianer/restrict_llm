@@ -48,6 +48,55 @@ if [ ! -x "$CLAUDE_BIN" ]; then
     exit 1
 fi
 
+# Suppress Claude Code's empty-canary file seeding in the launch cwd.
+# Two layers:
+#   1) Bind /dev/null (and a tmpfs for node_modules) over each missing canary
+#      name inside the sandbox, so Claude can't write real data into them
+#      during the session.
+#   2) On exit, remove the 0-byte placeholder files bwrap had to create on
+#      the underlying filesystem to mount over. Only files we ourselves
+#      provisioned are removed, and only if they're still 0 bytes — so any
+#      real project files (or a file that somehow got real content) are safe.
+WORKDIR=$(pwd)
+CANARY_FILES=(
+    .env .env.local
+    .env.development .env.development.local
+    .env.production .env.production.local
+    .env.test .env.test.local
+    .npmrc .yarnrc .yarnrc.yml
+    bunfig.toml
+    package.json package-lock.json
+    yarn.lock pnpm-lock.yaml pnpm-workspace.yaml
+    .gitmodules
+)
+CANARY_BIND_ARGS=()
+CREATED_CANARIES=()
+for f in "${CANARY_FILES[@]}"; do
+    if [ ! -e "$WORKDIR/$f" ]; then
+        CANARY_BIND_ARGS+=(--ro-bind /dev/null "$WORKDIR/$f")
+        CREATED_CANARIES+=("$f")
+    fi
+done
+CREATED_NODE_MODULES=0
+if [ ! -e "$WORKDIR/node_modules" ]; then
+    CANARY_BIND_ARGS+=(--tmpfs "$WORKDIR/node_modules")
+    CREATED_NODE_MODULES=1
+fi
+
+cleanup_canaries() {
+    local f
+    for f in "${CREATED_CANARIES[@]}"; do
+        if [ -f "$WORKDIR/$f" ] && [ ! -s "$WORKDIR/$f" ]; then
+            chmod u+w "$WORKDIR/$f" 2>/dev/null || true
+            rm -f "$WORKDIR/$f"
+        fi
+    done
+    if [ "$CREATED_NODE_MODULES" = 1 ] && [ -d "$WORKDIR/node_modules" ]; then
+        rmdir "$WORKDIR/node_modules" 2>/dev/null || true
+    fi
+}
+trap cleanup_canaries EXIT
+
 (exec /usr/bin/bwrap \
   --die-with-parent \
   --unshare-all \
@@ -86,6 +135,8 @@ fi
   --ro-bind "$LLM_HOME/.local" "$LLM_HOME/.local" \
   --ro-bind "$LLM_HOME/.bashrc" "$LLM_HOME/.bashrc" \
   --ro-bind "$LLM_HOME/.profile" "$LLM_HOME/.profile" \
+  \
+  "${CANARY_BIND_ARGS[@]}" \
   \
   --ro-bind /run/systemd/resolve /run/systemd/resolve \
   \
