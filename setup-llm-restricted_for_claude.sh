@@ -34,8 +34,12 @@ CLAUDE_BIN_DIR="/home/$LLM_USER/.local/bin"
 CLAUDE_INSTALLER_SHA256="${CLAUDE_INSTALLER_SHA256:-cde4f1702d3b1695f92b73d26888364e17bca476e17f0fd676484c951d36c125}"
 
 # Sudoers wrapper for ergonomic switching. Set CREATE_SUDOERS=0 to skip.
-# Able to switch from invoking_user to llm_user with the sw alias
+# Able to switch from invoking_user to llm_user with the $SW_ALIAS alias.
+# Both the sudoers file and the alias are keyed off $LLM_USER / $SW_ALIAS so
+# setting up a second restricted user (different LLM_USER) doesn't clobber
+# the first one's wrapper — override SW_ALIAS too when doing that.
 CREATE_SUDOERS="${CREATE_SUDOERS:-1}"
+SW_ALIAS="${SW_ALIAS:-sw}"
 # ─────────────────────────────────────────────────────────────────────────────
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -230,18 +234,23 @@ done
 
 if [ "$CREATE_SUDOERS" -eq 1 ]; then
     echo "==> 6. Sudoers wrapper for ergonomic switching"
-    cat > /etc/sudoers.d/llm_restricted <<SUDOERS
+    # Filename keyed by $LLM_USER so a second restricted user (different
+    # LLM_USER) gets its own file instead of overwriting this one.
+    cat > "/etc/sudoers.d/$LLM_USER" <<SUDOERS
 $INVOKING_USER ALL=($LLM_USER) NOPASSWD: /bin/bash
 SUDOERS
-    chmod 0440 /etc/sudoers.d/llm_restricted
-    visudo -cf /etc/sudoers.d/llm_restricted >/dev/null
+    chmod 0440 "/etc/sudoers.d/$LLM_USER"
+    visudo -cf "/etc/sudoers.d/$LLM_USER" >/dev/null
 fi
 
-echo "==> 7. Convenience alias 'sw' in $INVOKING_HOME/.alias"
+echo "==> 7. Convenience alias '$SW_ALIAS' in $INVOKING_HOME/.alias"
 # Idempotent: marker line guards against duplication on re-runs. The user is
 # expected to source ~/.alias from their shell rc (~/.bashrc / ~/.zshrc).
+# Marker is keyed by $SW_ALIAS (not just a fixed "sw") so setting up a second
+# restricted user with a different SW_ALIAS adds its own entry instead of
+# being skipped as already-present.
 ALIAS_FILE="$INVOKING_HOME/.alias"
-ALIAS_MARKER="# managed by setup-llm-restricted_for_claude.sh: sw"
+ALIAS_MARKER="# managed by setup-llm-restricted_for_claude.sh: $SW_ALIAS"
 if [ ! -f "$ALIAS_FILE" ]; then
     touch "$ALIAS_FILE"
     chown "$INVOKING_USER:$(id -gn "$INVOKING_USER")" "$ALIAS_FILE"
@@ -251,7 +260,7 @@ if ! grep -qF "$ALIAS_MARKER" "$ALIAS_FILE"; then
     {
         echo
         echo "$ALIAS_MARKER"
-        echo "alias sw='sudo -i -u $LLM_USER'"
+        echo "alias $SW_ALIAS='sudo -i -u $LLM_USER'"
     } >> "$ALIAS_FILE"
 fi
 

@@ -13,16 +13,30 @@
 #
 # No setuid binary — bwrap uses unprivileged user namespaces.
 #
-# Install:
-#   cp claude-sandboxed /home/llm_restricted/.local/bin/claude-sandboxed
-#   chmod +x /home/llm_restricted/.local/bin/claude-sandboxed
-#   ./generate-seccomp-filter -o /home/llm_restricted/.local/share/claude/seccomp-filter.bpf
+# Install (run as the restricted user, e.g. llm_restricted or llm_restricted2):
+#   cp claude-sandboxed ~/.local/bin/claude-sandboxed
+#   chmod +x ~/.local/bin/claude-sandboxed
+#   ./generate-seccomp-filter -o ~/.local/share/claude/seccomp-filter.bpf
+#
+# LLM_USER / HOST_PROJECTS_DIR env vars override the auto-detected restricted
+# user and the invoking user's shared projects dir, respectively — see below.
 
 set -euo pipefail
 
-CLAUDE_BIN="$(readlink -f /home/llm_restricted/.local/bin/claude)"
+# Defaults to the user this script is actually running as, so it works
+# unmodified for any restricted account (llm_restricted, llm_restricted2, …)
+# without needing an env override. LLM_USER lets you force a different value
+# (e.g. invoking via sudo from another account).
+LLM_USER="${LLM_USER:-$(id -un)}"
+LLM_HOME="/home/$LLM_USER"
 
-SECCOMP_FILTER="/home/llm_restricted/.local/share/claude/seccomp-filter.bpf"
+# The invoking (host) user's shared projects dir, bind-mounted in alongside
+# the restricted user's own. Override if the invoking user isn't gmarano.
+HOST_PROJECTS_DIR="${HOST_PROJECTS_DIR:-/home/gmarano/projects}"
+
+CLAUDE_BIN="$(readlink -f "$LLM_HOME/.local/bin/claude")"
+
+SECCOMP_FILTER="$LLM_HOME/.local/share/claude/seccomp-filter.bpf"
 if [ ! -f "$SECCOMP_FILTER" ]; then
     echo "seccomp filter not found at $SECCOMP_FILTER" >&2
     echo "Generate it with: generate-seccomp-filter -o $SECCOMP_FILTER" >&2
@@ -64,22 +78,21 @@ fi
   --file 11 /etc/passwd \
   --file 12 /etc/group \
   \
-  --tmpfs /home/llm_restricted \
-  --bind /home/llm_restricted/projects /home/llm_restricted/projects \
-  --bind /home/emily/projects /home/emily/projects \
-  --bind /home/emily/virtual_envs /home/emily/virtual_envs \
-  --bind /home/llm_restricted/.claude /home/llm_restricted/.claude \
-  --bind /home/llm_restricted/config /home/llm_restricted/config \
-  --ro-bind /home/llm_restricted/.local /home/llm_restricted/.local \
-  --ro-bind /home/llm_restricted/.bashrc /home/llm_restricted/.bashrc \
-  --ro-bind /home/llm_restricted/.profile /home/llm_restricted/.profile \
+  --tmpfs "$LLM_HOME" \
+  --bind "$LLM_HOME/projects" "$LLM_HOME/projects" \
+  --bind "$HOST_PROJECTS_DIR" "$HOST_PROJECTS_DIR" \
+  --bind "$LLM_HOME/.claude" "$LLM_HOME/.claude" \
+  --bind "$LLM_HOME/config" "$LLM_HOME/config" \
+  --ro-bind "$LLM_HOME/.local" "$LLM_HOME/.local" \
+  --ro-bind "$LLM_HOME/.bashrc" "$LLM_HOME/.bashrc" \
+  --ro-bind "$LLM_HOME/.profile" "$LLM_HOME/.profile" \
   \
   --ro-bind /run/systemd/resolve /run/systemd/resolve \
   \
   --seccomp 10 \
   \
-  --setenv HOME /home/llm_restricted \
-  --setenv USER llm_restricted \
+  --setenv HOME "$LLM_HOME" \
+  --setenv USER "$LLM_USER" \
   --setenv TMPDIR /tmp \
   --setenv CLAUDE_CODE_SUBPROCESS_ENV_SCRUB 1 \
   \
