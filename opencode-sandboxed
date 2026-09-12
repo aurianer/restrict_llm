@@ -1,0 +1,157 @@
+#!/bin/bash
+# Launches opencode inside a bwrap sandbox with:
+#   - All namespaces unshared (PID, IPC, UTS, cgroup, user) + net re-enabled
+#   - Mount namespace: only explicitly listed paths visible
+#   - Minimal /etc (only ssl, resolv.conf, hosts, nsswitch.conf, ld config)
+#   - Synthetic /etc/passwd and /etc/group (no system user list leak)
+#   - Private /tmp, home tmpfs (anything not listed is empty)
+#   - No /sys, no /run (except systemd-resolved stub)
+#   - seccomp-bpf filter (~49 dangerous syscalls blocked by the kernel; the
+#     same filter used by claude-sandboxed — see generate-seccomp-filter.c
+#     for why mount/umount2/pivot_root/netlink stay allowed. Stock opencode
+#     doesn't nest its own bwrap the way Claude Code does, so those
+#     exemptions aren't load-bearing here, but sharing one compiled filter
+#     keeps the two wrappers simple)
+#   - --new-session (prevents TIOCSTI terminal injection into parent)
+#   - --die-with-parent (auto-cleanup on parent exit)
+#
+# No setuid binary — bwrap uses unprivileged user namespaces.
+#
+# Install (run as the restricted user, e.g. llm_restricted_opencode):
+#   cp opencode-sandboxed ~/.local/bin/opencode-sandboxed
+#   chmod +x ~/.local/bin/opencode-sandboxed
+#   ./generate-seccomp-filter -o ~/.local/share/opencode/seccomp-filter.bpf
+#
+# LLM_USER / HOST_PROJECTS_DIR env vars override the auto-detected restricted
+# user and the invoking user's shared projects dir, respectively — see below.
+
+set -euo pipefail
+
+# Defaults to the user this script is actually running as, so it works
+# unmodified for any restricted account without needing an env override.
+# LLM_USER lets you force a different value (e.g. invoking via sudo from
+# another account).
+LLM_USER="${LLM_USER:-$(id -un)}"
+LLM_HOME="/home/$LLM_USER"
+
+# The invoking (host) user's shared projects dir, bind-mounted in alongside
+# the restricted user's own. Override if the invoking user isn't gmarano.
+HOST_PROJECTS_DIR="${HOST_PROJECTS_DIR:-/home/gmarano/projects}"
+
+OPENCODE_BIN="$(readlink -f "$LLM_HOME/.opencode/bin/opencode")"
+
+SECCOMP_FILTER="$LLM_HOME/.local/share/opencode/seccomp-filter.bpf"
+if [ ! -f "$SECCOMP_FILTER" ]; then
+    echo "seccomp filter not found at $SECCOMP_FILTER" >&2
+    echo "Generate it with: generate-seccomp-filter -o $SECCOMP_FILTER" >&2
+    exit 1
+fi
+
+if [ ! -x "$OPENCODE_BIN" ]; then
+    echo "opencode binary not found or not executable: $OPENCODE_BIN" >&2
+    exit 1
+fi
+
+# Suppress the same class of empty-canary seeding claude-sandboxed guards
+# against. Two layers:
+#   1) Bind /dev/null (and a tmpfs for node_modules) over each missing canary
+#      name inside the sandbox, so opencode can't write real data into them
+#      during the session.
+#   2) On exit, remove the 0-byte placeholder files bwrap had to create on
+#      the underlying filesystem to mount over. Only files we ourselves
+#      provisioned are removed, and only if they're still 0 bytes — so any
+#      real project files (or a file that somehow got real content) are safe.
+WORKDIR=$(pwd)
+CANARY_FILES=(
+    .env .env.local
+    .env.development .env.development.local
+    .env.production .env.production.local
+    .env.test .env.test.local
+    .npmrc .yarnrc .yarnrc.yml
+    bunfig.toml
+    package.json package-lock.json
+    yarn.lock pnpm-lock.yaml pnpm-workspace.yaml
+    .gitmodules
+)
+CANARY_BIND_ARGS=()
+CREATED_CANARIES=()
+for f in "${CANARY_FILES[@]}"; do
+    if [ ! -e "$WORKDIR/$f" ]; then
+        CANARY_BIND_ARGS+=(--ro-bind /dev/null "$WORKDIR/$f")
+        CREATED_CANARIES+=("$f")
+    fi
+done
+CREATED_NODE_MODULES=0
+if [ ! -e "$WORKDIR/node_modules" ]; then
+    CANARY_BIND_ARGS+=(--tmpfs "$WORKDIR/node_modules")
+    CREATED_NODE_MODULES=1
+fi
+
+cleanup_canaries() {
+    local f
+    for f in "${CREATED_CANARIES[@]}"; do
+        if [ -f "$WORKDIR/$f" ] && [ ! -s "$WORKDIR/$f" ]; then
+            chmod u+w "$WORKDIR/$f" 2>/dev/null || true
+            rm -f "$WORKDIR/$f"
+        fi
+    done
+    if [ "$CREATED_NODE_MODULES" = 1 ] && [ -d "$WORKDIR/node_modules" ]; then
+        rmdir "$WORKDIR/node_modules" 2>/dev/null || true
+    fi
+}
+trap cleanup_canaries EXIT
+
+(exec /usr/bin/bwrap \
+  --die-with-parent \
+  --unshare-all \
+  --share-net \
+  --new-session \
+  \
+  --dev /dev \
+  --proc /proc \
+  --tmpfs /tmp \
+  \
+  --ro-bind /usr /usr \
+  --ro-bind /lib /lib \
+  --ro-bind /lib64 /lib64 \
+  --ro-bind /bin /bin \
+  --ro-bind /sbin /sbin \
+  \
+  --ro-bind /etc/ssl /etc/ssl \
+  --ro-bind /etc/resolv.conf /etc/resolv.conf \
+  --ro-bind /etc/hosts /etc/hosts \
+  --ro-bind /etc/nsswitch.conf /etc/nsswitch.conf \
+  --ro-bind /etc/ld.so.cache /etc/ld.so.cache \
+  --ro-bind /etc/ld.so.conf /etc/ld.so.conf \
+  --ro-bind /etc/ld.so.conf.d /etc/ld.so.conf.d \
+  --ro-bind /etc/alternatives /etc/alternatives \
+  --ro-bind /etc/localtime /etc/localtime \
+  --ro-bind /etc/mime.types /etc/mime.types \
+  --ro-bind /etc/ca-certificates /etc/ca-certificates \
+  --file 11 /etc/passwd \
+  --file 12 /etc/group \
+  \
+  --tmpfs "$LLM_HOME" \
+  --bind "$LLM_HOME/projects" "$LLM_HOME/projects" \
+  --bind "$HOST_PROJECTS_DIR" "$HOST_PROJECTS_DIR" \
+  --ro-bind "$LLM_HOME/.opencode" "$LLM_HOME/.opencode" \
+  --bind "$LLM_HOME/.config/opencode" "$LLM_HOME/.config/opencode" \
+  --bind "$LLM_HOME/.local/share/opencode" "$LLM_HOME/.local/share/opencode" \
+  --ro-bind "$LLM_HOME/.bashrc" "$LLM_HOME/.bashrc" \
+  --ro-bind "$LLM_HOME/.profile" "$LLM_HOME/.profile" \
+  \
+  "${CANARY_BIND_ARGS[@]}" \
+  \
+  --ro-bind /run/systemd/resolve /run/systemd/resolve \
+  \
+  --seccomp 10 \
+  \
+  --setenv HOME "$LLM_HOME" \
+  --setenv USER "$LLM_USER" \
+  --setenv TMPDIR /tmp \
+  \
+  "$OPENCODE_BIN" "$@") \
+  \
+  10< "$SECCOMP_FILTER" \
+  11< <(getent passwd "$(id -u)" 65534) \
+  12< <(getent group "$(id -g)" 65534)

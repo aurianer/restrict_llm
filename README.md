@@ -138,6 +138,68 @@ surface — an acceptable trade to let Claude Code run shell commands at all.
 `chroot` and the newer mount-API calls (`fsopen`, `move_mount`, `open_tree`, …)
 stay blocked (standard bwrap doesn't need them).
 
+## OpenCode variant
+
+The same design applies to [opencode](https://opencode.ai/), a second AI
+coding agent CLI, via a parallel pair of scripts:
+**`setup-llm-restricted_for_opencode.sh`** and **`opencode-sandboxed`**.
+It deliberately uses a **separate** user/group (`llm_restricted_opencode` /
+`llm_group_opencode`, not `llm_restricted` / `llm_group`) so a compromise of
+either tool can't reach the other's config, credentials, or seccomp filter —
+even though both share the same `LLM_ALLOWED_DIRS` project trees.
+
+```bash
+# 1. Create the llm_restricted_opencode user/ACLs and install opencode as
+#    that user (sha256-pinned installer). Idempotent, same as the Claude script.
+sudo bash setup-llm-restricted_for_opencode.sh
+
+# 2. (Optional) Host-wide hardening for the *second* UID — reuses the exact
+#    same harden-host.sh, just pointed at the new user:
+sudo LLM_USER=llm_restricted_opencode bash harden-host.sh
+
+# 3. Switch to the sandboxed user (NOPASSWD via the sudoers entry from step 1,
+#    or the 'swo' alias — kept distinct from Claude's 'sw' alias).
+sudo -i -u llm_restricted_opencode
+
+# 4. Launch opencode. First run: `opencode auth login` — credentials land in
+#    /home/llm_restricted_opencode/.local/share/opencode/, isolated from your
+#    own and from the Claude sandbox's.
+opencode
+```
+
+Installing the wrapper + seccomp filter is manual, same as for Claude:
+
+```bash
+sudo install -Dm755 opencode-sandboxed /home/llm_restricted_opencode/.local/bin/opencode-sandboxed
+sudo ./generate-seccomp-filter -o /home/llm_restricted_opencode/.local/share/opencode/seccomp-filter.bpf
+sudo chown -R llm_restricted_opencode:llm_group_opencode \
+  /home/llm_restricted_opencode/.local/bin/opencode-sandboxed \
+  /home/llm_restricted_opencode/.local/share/opencode/seccomp-filter.bpf
+```
+
+Notes specific to this variant:
+
+- **Same compiled filter, different rationale.** `opencode-sandboxed` loads
+  the identical seccomp-bpf output as `claude-sandboxed` (built from the same
+  `generate-seccomp-filter.c`, just installed to a second path). The
+  `mount`/`umount2`/`pivot_root`/netlink-raw-socket exemptions documented
+  above exist because Claude Code's Bash tool nests its own bwrap — stock
+  opencode does not do this by default (that behavior only exists via a
+  third-party plugin, `opencode-sandbox-plugin`), so those exemptions aren't
+  load-bearing here. They're kept anyway so both wrappers can share one
+  compiled artifact instead of maintaining two near-identical filters.
+- **Different bind-mount set**, matching opencode's actual layout: the binary
+  lives in `~/.opencode/bin` (not `~/.local/bin`), config in
+  `~/.config/opencode/`, and credentials/session data in
+  `~/.local/share/opencode/` — no single-file config quirk like Claude's
+  `~/.claude.json`, so no migration step is needed.
+- **Egress allowlisting intentionally skipped for now.** Unlike the Claude
+  setup, no opencode-specific FQDNs are pre-populated in `harden-host.sh` —
+  which provider(s) opencode will call hasn't been decided yet. Once it is,
+  add the provider's API host(s) via `EXTRA_FQDNS="..."` and re-run
+  `harden-host.sh` with `APPLY_EGRESS=1 LLM_USER=llm_restricted_opencode`.
+  Until then, only the IMDS block and disabled lingering apply to this UID.
+
 ## What this setup brings
 
 - User and group
