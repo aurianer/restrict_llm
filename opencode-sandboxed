@@ -134,7 +134,8 @@ trap cleanup_canaries EXIT
   --tmpfs "$LLM_HOME" \
   --bind "$LLM_HOME/projects" "$LLM_HOME/projects" \
   --bind "$HOST_PROJECTS_DIR" "$HOST_PROJECTS_DIR" \
-  --ro-bind "$LLM_HOME/.opencode" "$LLM_HOME/.opencode" \
+  --bind    "$LLM_HOME/.opencode" "$LLM_HOME/.opencode" \
+  --ro-bind "$LLM_HOME/.opencode/bin" "$LLM_HOME/.opencode/bin" \
   --bind "$LLM_HOME/.config/opencode" "$LLM_HOME/.config/opencode" \
   --bind "$LLM_HOME/.local/share/opencode" "$LLM_HOME/.local/share/opencode" \
   --ro-bind "$LLM_HOME/.bashrc" "$LLM_HOME/.bashrc" \
