@@ -149,7 +149,7 @@ if [ -f "$LLM_BASHRC" ] && ! grep -qF "$ALIAS_MARKER" "$LLM_BASHRC"; then
     {
         echo
         echo "$ALIAS_MARKER"
-        echo "alias claude='claude-sandboxed'"
+        echo "alias claude='/usr/local/bin/claude-sandboxed'"
     } >> "$LLM_BASHRC"
     chown "$LLM_USER:$LLM_GROUP" "$LLM_BASHRC"
 fi

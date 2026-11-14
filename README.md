@@ -86,36 +86,40 @@ in [bubblewrap](https://github.com/containers/bubblewrap):
   `perf_event_open`, raw sockets, clock/hostname changes, etc. Generated from
   `generate-seccomp-filter.c`.
 
-The setup script aliases `claude='claude-sandboxed'` in the restricted user's
+The setup script aliases `claude='/usr/local/bin/claude-sandboxed'` in the restricted user's
 `.bashrc`, so an interactive `claude` launches through the wrapper (convenience
 only — the raw binary is still reachable via full path or `command claude`).
 
 ### Installing / updating the wrapper + filter
 
 The wrapper and its compiled seccomp filter are installed **manually** (the
-setup script does not copy them). Run on the **host** — the targets live under
-the restricted user's `~/.local`, which is read-only inside the jail. Requires
-`gcc` and `libseccomp-dev`:
+setup script does not copy them). Run on the **host**. Requires `gcc` and
+`libseccomp-dev`.
+
+Both are installed **root-owned, outside the restricted user's home**: the
+restricted user can run and read them, but neither replace nor edit them, jailed
+or not. Do not symlink the launcher into this repository, nor keep it in
+`~/.local/bin`: the jail can write to the repository, and `llm_restricted` owns
+`~/.local/bin` (Claude Code updates itself there), so either would let a session
+rewrite the launcher and drop the jail on its next start.
 
 ```bash
 cd /home/<you>/projects/restrict_llm
 
 # 1. install the launcher
-sudo install -Dm755 claude-sandboxed /home/llm_restricted/.local/bin/claude-sandboxed
+sudo install -o root -g root -m 755 claude-sandboxed /usr/local/bin/claude-sandboxed
 
 # 2. compile the generator and emit the BPF the launcher loads at startup
 gcc -O2 -o generate-seccomp-filter generate-seccomp-filter.c -lseccomp
-sudo ./generate-seccomp-filter -o /home/llm_restricted/.local/share/claude/seccomp-filter.bpf
-
-# 3. make sure the restricted user can read them
-sudo chown -R llm_restricted:llm_group \
-  /home/llm_restricted/.local/bin/claude-sandboxed \
-  /home/llm_restricted/.local/share/claude/seccomp-filter.bpf
+sudo install -d -o root -g root -m 755 /usr/local/share/claude-sandboxed
+sudo ./generate-seccomp-filter -o /usr/local/share/claude-sandboxed/seccomp-filter.bpf
+sudo chmod 644 /usr/local/share/claude-sandboxed/seccomp-filter.bpf
 ```
 
-Re-run steps 2–3 whenever you edit the blocklist in `generate-seccomp-filter.c`,
-then **restart the Claude session** so the new filter is loaded (it's read from a
-file descriptor at launch, not re-read live).
+Re-run step 1 whenever you edit `claude-sandboxed`, and step 2 whenever you edit
+the blocklist in `generate-seccomp-filter.c`, then **restart the Claude session**
+so the new filter is loaded (it's read from a file descriptor at launch, not
+re-read live).
 
 ### Nested bwrap — why `mount`/`umount2`/`pivot_root` stay allowed
 
