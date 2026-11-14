@@ -13,16 +13,16 @@
 #
 # No setuid binary — bwrap uses unprivileged user namespaces.
 #
-# Install:
-#   cp claude-sandboxed /home/llm_restricted/.local/bin/claude-sandboxed
-#   chmod +x /home/llm_restricted/.local/bin/claude-sandboxed
-#   ./generate-seccomp-filter -o /home/llm_restricted/.local/share/claude/seccomp-filter.bpf
+# Install root-owned, outside the restricted user's home (see README):
+#   sudo install -o root -g root -m 755 claude-sandboxed /usr/local/bin/claude-sandboxed
+#   sudo install -d -o root -g root -m 755 /usr/local/share/claude-sandboxed
+#   sudo ./generate-seccomp-filter -o /usr/local/share/claude-sandboxed/seccomp-filter.bpf
 
 set -euo pipefail
 
 CLAUDE_BIN="$(readlink -f /home/llm_restricted/.local/bin/claude)"
 
-SECCOMP_FILTER="/home/llm_restricted/.local/share/claude/seccomp-filter.bpf"
+SECCOMP_FILTER="/usr/local/share/claude-sandboxed/seccomp-filter.bpf"
 if [ ! -f "$SECCOMP_FILTER" ]; then
     echo "seccomp filter not found at $SECCOMP_FILTER" >&2
     echo "Generate it with: generate-seccomp-filter -o $SECCOMP_FILTER" >&2
