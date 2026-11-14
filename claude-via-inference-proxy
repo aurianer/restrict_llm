@@ -1,0 +1,75 @@
+#!/bin/bash
+# Starts inference-proxy for one inference service, then claude-sandboxed pointed at it.
+# The real token is decrypted here, outside the sandbox, from the pass store, which the sandbox
+# does not mount, and is only handed to the proxy. Claude Code gets a random per-launch local key.
+#
+# Usage: claude-via-inference-proxy <upstream-url> <pass-entry> <bearer|x-api-key> [claude args]
+# Extra environment (CLAUDE_CONFIG_DIR, ANTHROPIC_MODEL, ...) is passed through to Claude Code.
+#
+# Install root-owned, like the launcher, so the sandbox cannot modify it:
+#   sudo install -o root -g root -m 755 claude-via-inference-proxy /usr/local/bin/
+# The proxy binary is built from the separate inference-proxy repo (see its README).
+
+set -euo pipefail
+umask 077
+
+PASS=/usr/bin/pass
+PROXY=/usr/local/bin/inference-proxy
+LAUNCHER=/usr/local/bin/claude-sandboxed
+STORE="$HOME/.password-store"
+LOG="$HOME/.cache/inference-proxy.log"
+
+if [ $# -lt 3 ]; then
+    echo "usage: ${0##*/} <upstream-url> <pass-entry> <bearer|x-api-key> [claude args]" >&2
+    exit 2
+fi
+upstream=$1 entry=$2 auth=$3
+shift 3
+
+# Helpers run by absolute path or with a fixed PATH: the caller's PATH may list directories
+# the sandbox can write to, and this script runs outside the sandbox.
+key="$(/usr/bin/od -An -N32 -tx1 /dev/urandom | /usr/bin/tr -d ' \n')"
+if [ "${#key}" -ne 64 ]; then
+    echo "could not generate the local key" >&2
+    exit 1
+fi
+/usr/bin/mkdir -p "${LOG%/*}"
+# env -i: nothing from the calling shell (SSL_CERT_FILE, ...) can change which CAs the proxy
+# trusts. The proxy picks a free port and reports it on its stdout, so a process squatting a
+# known port cannot pose as the proxy.
+coproc PROXY_IO { exec /usr/bin/env -i "$PROXY" --upstream "$upstream" --auth "$auth" 2>>"$LOG"; }
+proxy_pid=$PROXY_IO_PID
+trap 'kill "$proxy_pid" 2>/dev/null || true' EXIT
+# Own copies of the pipe ends: bash drops PROXY_IO as soon as the proxy exits.
+exec {to_proxy}>&"${PROXY_IO[1]}" {from_proxy}<&"${PROXY_IO[0]}" {PROXY_IO[1]}>&-
+
+fail_start() {
+    echo "inference proxy failed to start, see $LOG" >&2
+    exit 1
+}
+# Catch a proxy that refused its arguments before asking for a YubiKey touch.
+/usr/bin/sleep 0.2
+kill -0 "$proxy_pid" 2>/dev/null || fail_start
+
+# pass writes the token straight into the proxy's stdin, so it never sits in this shell's
+# memory (which, unlike the proxy's, can be dumped). The proxy ignores lines after the token.
+decrypted=1
+trap '' PIPE
+{
+    printf '%s\n' "$key" 2>/dev/null || true
+    PATH=/usr/bin:/bin PASSWORD_STORE_DIR="$STORE" "$PASS" show -- "$entry" || decrypted=0
+} >&"$to_proxy"
+exec {to_proxy}>&-
+trap - PIPE
+if [ "$decrypted" -ne 1 ]; then
+    echo "could not decrypt $entry from $STORE" >&2
+    exit 1
+fi
+
+reported=""
+IFS= read -r -t 15 reported <&"$from_proxy" || true
+exec {from_proxy}<&-
+[[ $reported =~ ^port=([0-9]+)$ ]] || fail_start
+
+ANTHROPIC_BASE_URL="http://127.0.0.1:${BASH_REMATCH[1]}" ANTHROPIC_AUTH_TOKEN="$key" \
+    "$LAUNCHER" "$@"
