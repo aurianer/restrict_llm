@@ -85,6 +85,8 @@ mkdir -p -- "$CONFIG_DIR"
   --ro-bind /home/llm_restricted/.local /home/llm_restricted/.local \
   --ro-bind /home/llm_restricted/.bashrc /home/llm_restricted/.bashrc \
   --ro-bind /home/llm_restricted/.profile /home/llm_restricted/.profile \
+  --ro-bind-try /home/llm_restricted/.gnupg /home/llm_restricted/.gnupg \
+  --ro-bind-try /home/llm_restricted/.password-store /home/llm_restricted/.password-store \
   \
   --ro-bind /run/systemd/resolve /run/systemd/resolve \
   \
