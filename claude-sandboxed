@@ -34,6 +34,18 @@ if [ ! -x "$CLAUDE_BIN" ]; then
     exit 1
 fi
 
+# One config dir per launch, so a session never sees another config's history or tokens.
+# Only ~/.claude or ~/.claude-* may be bound; realpath resolves ".." and symlinks first.
+CONFIG_DIR="$(realpath -m -- "${CLAUDE_CONFIG_DIR:-/home/llm_restricted/.claude}")"
+case "$CONFIG_DIR" in
+    /home/llm_restricted/.claude|/home/llm_restricted/.claude-*) ;;
+    *)
+        echo "CLAUDE_CONFIG_DIR must be ~/.claude or ~/.claude-*: $CONFIG_DIR" >&2
+        exit 1
+        ;;
+esac
+mkdir -p -- "$CONFIG_DIR"
+
 (exec /usr/bin/bwrap \
   --die-with-parent \
   --unshare-all \
@@ -68,7 +80,7 @@ fi
   --bind /home/llm_restricted/projects /home/llm_restricted/projects \
   --bind /home/emily/projects /home/emily/projects \
   --bind /home/emily/virtual_envs /home/emily/virtual_envs \
-  --bind /home/llm_restricted/.claude /home/llm_restricted/.claude \
+  --bind "$CONFIG_DIR" "$CONFIG_DIR" \
   --bind /home/llm_restricted/config /home/llm_restricted/config \
   --ro-bind /home/llm_restricted/.local /home/llm_restricted/.local \
   --ro-bind /home/llm_restricted/.bashrc /home/llm_restricted/.bashrc \
@@ -81,6 +93,7 @@ fi
   --setenv HOME /home/llm_restricted \
   --setenv USER llm_restricted \
   --setenv TMPDIR /tmp \
+  --setenv CLAUDE_CONFIG_DIR "$CONFIG_DIR" \
   --setenv CLAUDE_CODE_SUBPROCESS_ENV_SCRUB 1 \
   \
   "$CLAUDE_BIN" "$@") \
