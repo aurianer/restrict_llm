@@ -77,7 +77,8 @@ in [bubblewrap](https://github.com/containers/bubblewrap):
 - **All namespaces unshared** (`--unshare-all`) with networking re-enabled
   (`--share-net`) and `--new-session` (blocks TIOCSTI terminal injection).
 - **Private mount namespace** — only explicitly bind-mounted paths are visible
-  (`~/projects`, `/home/emily/projects`, `~/.claude`, plus a minimal read-only
+  (`~/projects`, `/home/emily/projects`, the config dir from `CLAUDE_CONFIG_DIR`
+  (`~/.claude` or `~/.claude-*`, one per launch), plus a minimal read-only
   `/usr`, `/lib`, `/etc/ssl`, …). The rest of `$HOME` is a tmpfs; `/sys` and
   `/run` (except the systemd-resolved stub) are absent.
 - **seccomp-bpf filter** — ~49 dangerous syscalls rejected with `EPERM`: kernel
