@@ -242,6 +242,8 @@ echo "==> 7. Convenience alias 'sw' in $INVOKING_HOME/.alias"
 # expected to source ~/.alias from their shell rc (~/.bashrc / ~/.zshrc).
 ALIAS_FILE="$INVOKING_HOME/.alias"
 ALIAS_MARKER="# managed by setup-llm-restricted_for_claude.sh: sw"
+# script(1) gives the shell a pty owned by $LLM_USER, so pinentry can open it.
+ALIAS_LINE="alias sw='sudo -i -u $LLM_USER script -q /dev/null'"
 if [ ! -f "$ALIAS_FILE" ]; then
     touch "$ALIAS_FILE"
     chown "$INVOKING_USER:$(id -gn "$INVOKING_USER")" "$ALIAS_FILE"
@@ -251,8 +253,10 @@ if ! grep -qF "$ALIAS_MARKER" "$ALIAS_FILE"; then
     {
         echo
         echo "$ALIAS_MARKER"
-        echo "alias sw='sudo -i -u $LLM_USER'"
+        echo "$ALIAS_LINE"
     } >> "$ALIAS_FILE"
+else
+    sed -i "\|^$ALIAS_MARKER\$|{n;s|^alias sw=.*|$ALIAS_LINE|;}" "$ALIAS_FILE"
 fi
 
 echo "==> 8. AppArmor: allow bwrap to create user namespaces (Ubuntu 24.04+)"

@@ -171,7 +171,7 @@ stay blocked (standard bwrap doesn't need them).
 - AppArmor profile for bwrap (Ubuntu 24.04+)
   - When `kernel.apparmor_restrict_unprivileged_userns=1` is active, writes `/etc/apparmor.d/bwrap` granting only the `userns` permission so the `claude-sandboxed` bwrap wrapper can create user namespaces. Without it, bwrap fails with `setting up uid map: Permission denied`. The global restriction stays on for every other binary. No-op on hosts without the restriction / without bwrap / without `apparmor_parser`.
 - Convenience alias
-  - Appends `alias sw='sudo -i -u llm_restricted'` to `/home/$INVOKING_USER/.alias` (creates the file if missing). Source it from your shell rc (e.g. add `[ -f ~/.alias ] && . ~/.alias` to `~/.bashrc` / `~/.zshrc`) so `sw` drops you into the sandboxed shell. Idempotent — guarded by a marker line so re-runs don't duplicate the entry.
+  - Appends `alias sw='sudo -i -u llm_restricted script -q /dev/null'` to `/home/$INVOKING_USER/.alias` (creates the file if missing). Source it from your shell rc (e.g. add `[ -f ~/.alias ] && . ~/.alias` to `~/.bashrc` / `~/.zshrc`) so `sw` drops you into the sandboxed shell. `script` gives that shell a terminal owned by `llm_restricted`, so a pinentry (e.g. for a YubiKey PIN) can open it; nothing is recorded. Idempotent — guarded by a marker line so re-runs don't duplicate the entry, and an older managed `sw` line is rewritten in place.
 
 ## Pitfalls — how Claude (or a compromised tool it runs) could still cause harm
 
